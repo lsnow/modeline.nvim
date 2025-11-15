@@ -7,25 +7,23 @@ end
 
 local function default()
   local comps = {
-    -- [[%#ModeLineMode#%{v:lua.ml_mode()}%*]],
-    " %{&fileencoding=='utf-8'||&fileencoding==''?'U':&fileencoding=='latin1'?'1':'-'}",
-    "%{&encoding=='utf-8'?'U':''}",
-    "%{&fileformat=='dos'?'\\\\':&fileformat=='mac'?'/':':'}",
-    "%{&readonly?(&modified?'%*':'%%'):(&modified?'**':'--')}-",
-    '  T%{tabpagenr()} ',
-    '%#ModeLineMode#%t%*', -- file name
-    "  %P (%{printf('0x%03X, 0x%03X', line('.'), col('.'))})    ",
+    [[%#ModeLineMode#%{v:lua.ml_mode()}%*]],
+    p.encoding(),
+    p.eol(),
+    [[%{(&modified&&&readonly?'%*':(&modified?'**':(&readonly?'%%':'--')))}  ]],
+    p.fileinfo(),
     p.gitinfo(),
-    ' %=',
+    ' %=%=',
     [[%{(bufname() !=# '' && &bt != 'terminal' ? '(' : '')}]],
-    "%{( &ft == 'cpp' ? 'C++' : toupper(strpart(&ft, 0, 1)) . strpart(&ft, 1)) }",
+    p.filetype(),
     p.diagnostic(),
     [[%{(bufname() !=# '' && &bt != 'terminal' ? ')' : '')}]],
     p.progress(),
     p.lsp(),
+    '  %2*%b(0x%B)%1* ',
     '%=%=',
+    ' (%l,%c) %P  ',
   }
-
   local e, pieces = {}, {}
   iter(ipairs(comps))
     :map(function(key, item)
@@ -53,18 +51,13 @@ local function render(comps, events, pieces)
     while true do
       local event = args.event == 'User' and ('%s %s'):format(args.event, args.match) or args.event
       for _, idx in ipairs(events[event]) do
-        if comps[idx].cond and comps[idx].cond() == false then
-          goto continue
-        end
         if comps[idx].async then
           local child = comps[idx].stl()
           coroutine.resume(child, pieces, idx)
         else
           pieces[idx] = stl_format(comps[idx].name, comps[idx].stl(args))
         end
-        ::continue::
       end
-      -- print(vim.inspect(pieces))
       vim.opt.stl = table.concat(pieces)
       args = co.yield()
     end

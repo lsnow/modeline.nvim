@@ -1,5 +1,22 @@
-local api, lsp, diagnostic, M = vim.api, vim.lsp, vim.diagnostic, {}
+local api, uv, lsp, diagnostic, M = vim.api, vim.uv, vim.lsp, vim.diagnostic, {}
 local fnamemodify = vim.fn.fnamemodify
+
+local function get_stl_bg()
+  return api.nvim_get_hl(0, { name = 'StatusLine' }).bg or 'back'
+end
+
+local stl_bg = get_stl_bg()
+local function stl_attr(group)
+  local color = api.nvim_get_hl(0, { name = group, link = false })
+  return {
+    bg = get_stl_bg(),
+    fg = color.fg,
+  }
+end
+
+local function group_fmt(prefix, name, val)
+  return ('%%#ModeLine%s%s#%s%%*'):format(prefix, name, val)
+end
 
 local mode_alias = {
   --Normal
@@ -47,6 +64,34 @@ function _G.ml_mode()
   return m:sub(1, 3):upper()
 end
 
+function M.fileinfo()
+  return {
+    stl = [[%t]],
+    name = 'fileinfo',
+    event = { 'BufEnter' },
+  }
+end
+
+function M.filetype()
+  return {
+    name = 'filetype',
+    stl = function()
+      local alias = {
+        cpp = 'C++',
+        systemverilog = 'SystemVerilog',
+        javascript = 'JavaScript',
+      }
+      local ft = api.nvim_get_option_value('filetype', { buf = 0 })
+      local up = ft:sub(1, 1):upper()
+      if #ft == 1 then
+        return up
+      end
+      return alias[ft] and alias[ft] or up .. ft:sub(2, #ft)
+    end,
+    event = { 'BufEnter' },
+  }
+end
+
 function M.progress()
   local spinner = { '⣶', '⣧', '⣏', '⡟', '⠿', '⢻', '⣹', '⣼' }
   local idx = 1
@@ -63,7 +108,7 @@ function M.progress()
     end,
     name = 'LspProgress',
     event = { 'LspProgress' },
-    attr = { link = 'Type' },
+    attr = stl_attr('Type'),
   }
 end
 
@@ -78,10 +123,6 @@ function M.lsp()
       local client_names = vim
         .iter(clients)
         :map(function(client)
-          if args.event == 'LspDetach' and client.id == args.data.client_id then
-            return nil
-          end
-
           if client.root_dir then
             root_dir = client.root_dir
           end
@@ -90,14 +131,20 @@ function M.lsp()
         :totable()
 
       local msg = ('[%s:%s]'):format(
-        root_dir ~= 'single' and fnamemodify(root_dir, ':t') or 'single',
-        table.concat(client_names, ',')
+        table.concat(client_names, ','),
+        root_dir ~= 'single' and fnamemodify(root_dir, ':t') or 'single'
       )
       if args.data and args.data.params then
         local val = args.data.params.value
         if val.message and val.kind ~= 'end' then
-          msg = ('%s %s'):format(val.title, (val.percentage and val.percentage .. '%' or ''))
+          msg = ('%s %s%s'):format(
+            val.title,
+            (val.message and val.message .. ' ' or ''),
+            (val.percentage and val.percentage .. '%' or '')
+          )
         end
+      elseif args.event == 'LspDetach' then
+        msg = ''
       end
       return '   %-20s' .. msg
     end,
@@ -110,7 +157,7 @@ function M.gitinfo()
   local alias = { 'Head', 'Add', 'Change', 'Delete' }
   for i = 2, 4 do
     local color = api.nvim_get_hl(0, { name = 'Diff' .. alias[i] })
-    api.nvim_set_hl(0, 'ModeLineGit' .. alias[i], { fg = color.bg })
+    api.nvim_set_hl(0, 'ModeLineGit' .. alias[i], { fg = color.bg, bg = stl_bg })
   end
   return {
     stl = function()
@@ -136,10 +183,7 @@ function M.gitinfo()
         local parts = ''
         for i = 1, 4 do
           if i == 1 or (type(dict[order[i]]) == 'number' and dict[order[i]] > 0) then
-            parts = ('%s %s'):format(
-              parts,
-              ('%%#ModeLineGit%s#%s%%*'):format(alias[i], signs[i] .. dict[order[i]])
-            )
+            parts = ('%s %s'):format(parts, group_fmt('Git', alias[i], signs[i] .. dict[order[i]]))
           end
         end
         pieces[idx] = parts
@@ -151,23 +195,45 @@ function M.gitinfo()
   }
 end
 
+local function diagnostic_info()
+  return function()
+    if not vim.diagnostic.is_enabled({ bufnr = 0 }) or #lsp.get_clients({ bufnr = 0 }) == 0 then
+      return ''
+    end
+    local t = {}
+    for i = 1, 3 do
+      local count = #diagnostic.get(0, { severity = i })
+      t[#t + 1] = ('%%#ModeLine%s#%s%%*'):format(vim.diagnostic.severity[i], count)
+    end
+    return (' %s'):format(table.concat(t, ' '))
+  end
+end
+
 function M.diagnostic()
+  for i = 1, 3 do
+    local name = ('Diagnostic%s'):format(diagnostic.severity[i])
+    local fg = api.nvim_get_hl(0, { name = name }).fg
+    api.nvim_set_hl(0, 'ModeLine' .. diagnostic.severity[i], { fg = fg, bg = stl_bg })
+  end
   return {
-    stl = function()
-      if not vim.diagnostic.is_enabled({ bufnr = 0 }) or #lsp.get_clients({ bufnr = 0 }) == 0 then
-        return ''
-      end
-      local t = {}
-      for i = 1, 3 do
-        local count = #diagnostic.get(0, { severity = i })
-        t[#t + 1] = ('%%#Diagnostic%s#%s%%*'):format(vim.diagnostic.severity[i], count)
-      end
-      return (' [%s]'):format(table.concat(t, ' '))
-    end,
-    cond = function()
-      return tonumber(vim.fn.pumvisible()) == 0
-    end,
-    event = { 'DiagnosticChanged', 'BufEnter', 'LspAttach', 'LspDetach', 'InsertLeave' },
+    stl = diagnostic_info(),
+    event = { 'DiagnosticChanged', 'BufEnter', 'LspAttach' },
+  }
+end
+
+function M.eol()
+  return {
+    name = 'eol',
+    stl = (not uv.os_uname().sysname:find('Windows')) and ':' or '(Dos)',
+    event = { 'BufEnter' },
+  }
+end
+
+function M.encoding()
+  return {
+    stl = (' %s'):format(vim.bo.fileencoding),
+    name = 'filencode',
+    event = { 'BufEnter' },
   }
 end
 
@@ -207,7 +273,7 @@ function M.doucment_symbol()
       return coroutine.create(function(pieces, idx)
         local params = { textDocument = lsp.util.make_text_document_params() }
         local co = coroutine.running()
-        lsp.buf_request(0, 'textDocument/documentSymbol', params, function(err, result, ctx)
+        vim.lsp.buf_request(0, 'textDocument/documentSymbol', params, function(err, result, ctx)
           if err or not api.nvim_buf_is_loaded(ctx.bufnr) then
             return
           end

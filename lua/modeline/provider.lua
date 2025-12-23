@@ -1,17 +1,89 @@
-local api, uv, lsp, diagnostic, M = vim.api, vim.uv, vim.lsp, vim.diagnostic, {}
+local api, lsp, diagnostic, M = vim.api, vim.lsp, vim.diagnostic, {}
 local fnamemodify = vim.fn.fnamemodify
 
 local function get_stl_bg()
   return api.nvim_get_hl(0, { name = 'StatusLine' }).bg or 'back'
 end
 
+local function group_name(group)
+  return 'ModeLine' .. group
+end
+
 local stl_bg = get_stl_bg()
 local function stl_attr(group)
-  local color = api.nvim_get_hl(0, { name = group, link = false })
+  local color = api.nvim_get_hl(0, { name = group_name(group), link = false })
   return {
     bg = get_stl_bg(),
     fg = color.fg,
   }
+end
+
+local function int_to_rgb(color)
+  return {
+    r = bit.band(bit.rshift(color, 16), 0xFF),
+    g = bit.band(bit.rshift(color, 8), 0xFF),
+    b = bit.band(color, 0xFF)
+  }
+end
+
+-- W3C: 0.2126 * R + 0.7152 * G + 0.0722 * B
+local function get_luminance(rgb)
+  local rs = rgb.r / 255
+  local gs = rgb.g / 255
+  local bs = rgb.b / 255
+
+  -- Gamma
+  local function correct(c)
+    return c <= 0.03928 and c / 12.92 or math.pow((c + 0.055) / 1.055, 2.4)
+  end
+
+  local r = correct(rs)
+  local g = correct(gs)
+  local b = correct(bs)
+
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+end
+
+local function scale_color(color, target_max_val)
+  local rgb = int_to_rgb(color)
+
+  local max_val = math.max(rgb.r, rgb.g, rgb.b)
+  if max_val == 0 then
+    return bit.lshift(target_max_val, 16) + bit.lshift(target_max_val, 8) + target_max_val
+  end
+
+  local scale = target_max_val / max_val
+
+  local r = math.min(255, math.floor(rgb.r * scale))
+  local g = math.min(255, math.floor(rgb.g * scale))
+  local b = math.min(255, math.floor(rgb.b * scale))
+
+  return bit.lshift(r, 16) + bit.lshift(g, 8) + b
+end
+
+local function enhance_contrast(orig)
+  local bg_int = stl_bg
+  local fg_int = orig
+
+  local bg_rgb = int_to_rgb(bg_int)
+  local fg_rgb = int_to_rgb(fg_int)
+
+  local bg_lum = get_luminance(bg_rgb)
+  local fg_lum = get_luminance(fg_rgb)
+
+  local new_color = fg_int
+
+  if bg_lum < 0.5 then
+    if fg_lum < 0.6 then
+      new_color = scale_color(fg_int, 255)
+    end
+  else
+    if fg_lum > 0.4 then
+      new_color = scale_color(fg_int, 100)
+    end
+  end
+
+  return new_color
 end
 
 local function group_fmt(prefix, name, val)
@@ -65,29 +137,58 @@ function _G.ml_mode()
 end
 
 function M.fileinfo()
+  local name = vim.fn.expand('%:~')
+
+  if name == '' then
+    name = '[No Name]'
+  else
+    local relative_to_home = name --vim.fn.fnamemodify(name, ':~')
+    local relative_to_cwd = vim.fn.fnamemodify(name, ':.')
+
+    if #relative_to_cwd < #relative_to_home then
+      name = relative_to_cwd
+    else
+      name = relative_to_home
+    end
+
+    local max_length = 50
+    if #name > max_length then
+      local parts = vim.split(name, '/')
+      if #parts > 3 then
+        name = table.concat(vim.list_slice(parts, 1, 2), '/') .. '/.../' .. parts[#parts]
+      else
+        name = '...' .. name:sub(-(max_length - 3))
+      end
+    end
+  end
   return {
-    stl = [[%t]],
+    stl = ' ' .. name .. [[%{(&modified&&&readonly?' RO*':(&modified?' **':(&readonly?' RO':'')))}  ]],
     name = 'fileinfo',
     event = { 'BufEnter' },
+    attr = stl_attr('File'),
+  }
+end
+
+function M.position_info()
+  return {
+    stl = '%b(0x%B) %l,%c%V %P',
+    name = 'position',
+    event = { 'BufEnter' },
+    attr = stl_attr('Position'),
   }
 end
 
 function M.filetype()
+  local ft = api.nvim_get_option_value('filetype', { buf = 0 })
+  -- local up = ft:sub(1, 1):upper()
+  -- if #ft == 1 then
+  --   return up
+  -- end
+  -- local alias = { cpp = 'C++' }
+  -- return alias[ft] or up .. ft:sub(2, #ft)
   return {
     name = 'filetype',
-    stl = function()
-      local alias = {
-        cpp = 'C++',
-        systemverilog = 'SystemVerilog',
-        javascript = 'JavaScript',
-      }
-      local ft = api.nvim_get_option_value('filetype', { buf = 0 })
-      local up = ft:sub(1, 1):upper()
-      if #ft == 1 then
-        return up
-      end
-      return alias[ft] and alias[ft] or up .. ft:sub(2, #ft)
-    end,
+    stl = ft,
     event = { 'BufEnter' },
   }
 end
@@ -150,6 +251,7 @@ function M.lsp()
     end,
     name = 'Lsp',
     event = { 'LspProgress', 'LspAttach', 'LspDetach', 'BufEnter' },
+    attr = stl_attr('LSP'),
   }
 end
 
@@ -157,7 +259,7 @@ function M.gitinfo()
   local alias = { 'Head', 'Add', 'Change', 'Delete' }
   for i = 2, 4 do
     local color = api.nvim_get_hl(0, { name = 'Diff' .. alias[i] })
-    api.nvim_set_hl(0, 'ModeLineGit' .. alias[i], { fg = color.bg, bg = stl_bg })
+    api.nvim_set_hl(0, 'ModeLineGit' .. alias[i], { fg = enhance_contrast(color.bg), bg = stl_bg })
   end
   return {
     stl = function()
@@ -222,9 +324,23 @@ function M.diagnostic()
 end
 
 function M.eol()
+  local format = vim.bo.fileformat
+  local icon = ""
+  -- local text = ""
+
+  if format == 'unix' then
+    icon = " "
+    --text = "LF"
+  elseif format == 'dos' then
+    icon = " "
+    --text = "CRLF"
+  elseif format == 'mac' then
+    icon = " "
+    --text = "CR"
+  end
   return {
     name = 'eol',
-    stl = (not uv.os_uname().sysname:find('Windows')) and ':' or '(Dos)',
+    stl = (' %s'):format(icon),
     event = { 'BufEnter' },
   }
 end
@@ -291,6 +407,7 @@ function M.doucment_symbol()
     async = true,
     name = 'DocumentSymbol',
     event = { 'CursorHold' },
+    attr = stl_attr('Symbol'),
   }
 end
 

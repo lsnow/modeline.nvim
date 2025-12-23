@@ -7,22 +7,20 @@ end
 
 local function default()
   local comps = {
-    [[%#ModeLineMode#%{v:lua.ml_mode()}%*]],
-    p.encoding(),
-    p.eol(),
-    [[%{(&modified&&&readonly?'%*':(&modified?'**':(&readonly?'%%':'--')))}  ]],
-    p.fileinfo(),
     p.gitinfo(),
-    ' %=%=',
+    p.fileinfo(),
+    ' %=',
     [[%{(bufname() !=# '' && &bt != 'terminal' ? '(' : '')}]],
     p.filetype(),
     p.diagnostic(),
     [[%{(bufname() !=# '' && &bt != 'terminal' ? ')' : '')}]],
     p.progress(),
     p.lsp(),
-    '  %2*%b(0x%B)%1* ',
-    '%=%=',
-    ' (%l,%c) %P  ',
+    '   ',
+    p.encoding(),
+    p.eol(),
+    '   ',
+    p.position_info(),
   }
   local e, pieces = {}, {}
   iter(ipairs(comps))
@@ -64,8 +62,31 @@ local function render(comps, events, pieces)
   end)
 end
 
+local colors = {
+  bg = vim.api.nvim_get_hl(0, { name = 'StatusLine' }).bg or 'back',
+  fg = '#d8dee9',
+  yellow = '#ebcb8b',
+  cyan = '#88c0d0',
+  green = '#a3be8c',
+  orange = '#d08770',
+  magenta = '#b48ead',
+  blue = '#5e81ac',
+  red = '#bf616a'
+}
+
+local function set_highlights()
+  vim.api.nvim_set_hl(0, 'ModeLineFile', { bg = colors.bg, fg = colors.cyan, bold = true })
+  vim.api.nvim_set_hl(0, 'ModeLineGitHead', { bg = colors.bg, fg = colors.green })
+  vim.api.nvim_set_hl(0, 'ModeLineLSP', { bg = colors.bg, fg = colors.blue })
+  vim.api.nvim_set_hl(0, 'ModeLineEOL', { bg = colors.bg, fg = colors.blue })
+  -- vim.api.nvim_set_hl(0, 'ModeLinePosition', { bg = colors.bg, fg = colors.fg })
+  vim.api.nvim_set_hl(0, 'ModeLineSymbol', { bg = colors.bg, fg = colors.magenta })
+end
+
 return {
   setup = function()
+    set_highlights()
+
     local comps, events, pieces = default()
     local stl_render = render(comps, events, pieces)
     iter(vim.tbl_keys(events)):map(function(e)

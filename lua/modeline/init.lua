@@ -31,9 +31,10 @@ local function default()
         pieces[#pieces + 1] = stl_format(item.name, item.stl)
       else
         pieces[#pieces + 1] = item.default and stl_format(item.name, item.default) or ''
-        for _, event in ipairs({ unpack(item.event or {}) }) do
-          e[event] = e[event] or {}
-          e[event][#e[event] + 1] = key
+        for _, event in ipairs(item.event or {}) do
+          local ev, pattern = unpack(vim.split(event, ' '))
+          e[ev] = e[ev] or {}
+          e[ev][#e[ev] + 1] = { idx = key, pattern = pattern }
         end
       end
       if item.attr and item.name then
@@ -47,13 +48,31 @@ end
 local function render(comps, events, pieces)
   return co.create(function(args)
     while true do
-      local event = args.event == 'User' and ('%s %s'):format(args.event, args.match) or args.event
-      for _, idx in ipairs(events[event]) do
-        if comps[idx].async then
-          local child = comps[idx].stl()
+      local to_update = {}
+      if args == "ModeLineInit" then
+        for i, comp in ipairs(comps) do
+          if type(comp) == 'table' and type(comp.stl) == 'function' then
+            to_update[i] = true
+          end
+        end
+      else
+        local entries = events[args.event]
+        if entries then
+          for _, entry in ipairs(entries) do
+            if not entry.pattern or (args.event == 'User' and args.match == entry.pattern) then
+              to_update[entry.idx] = true
+            end
+          end
+        end
+      end
+
+      for idx, _ in pairs(to_update) do
+        local comp = comps[idx]
+        if comp.async then
+          local child = comp.stl()
           coroutine.resume(child, pieces, idx)
         else
-          pieces[idx] = stl_format(comps[idx].name, comps[idx].stl(args))
+          pieces[idx] = stl_format(comp.name, comp.stl(args))
         end
       end
       vim.opt.stl = table.concat(pieces)
@@ -75,12 +94,12 @@ local colors = {
 }
 
 local function set_highlights()
-  vim.api.nvim_set_hl(0, 'ModeLineFile', { bg = colors.bg, fg = colors.cyan, bold = true })
+  vim.api.nvim_set_hl(0, 'ModeLineFile', { bg = colors.bg, fg = colors.cyan, bold = false, })
   vim.api.nvim_set_hl(0, 'ModeLineGitHead', { bg = colors.bg, fg = colors.green })
-  vim.api.nvim_set_hl(0, 'ModeLineLSP', { bg = colors.bg, fg = colors.blue })
+  vim.api.nvim_set_hl(0, 'ModeLineLsp', { bg = colors.bg, fg = colors.blue, italic = true, })
   vim.api.nvim_set_hl(0, 'ModeLineEOL', { bg = colors.bg, fg = colors.blue })
-  -- vim.api.nvim_set_hl(0, 'ModeLinePosition', { bg = colors.bg, fg = colors.fg })
-  vim.api.nvim_set_hl(0, 'ModeLineSymbol', { bg = colors.bg, fg = colors.magenta })
+  -- vim.api.nvim_set_hl(0, 'ModeLinePosition', { bg = colors.bg, fg = colors.magenta })
+  vim.api.nvim_set_hl(0, 'ModeLineDocumentSymbol', { bg = colors.bg, fg = colors.magenta })
 end
 
 return {
@@ -89,25 +108,35 @@ return {
 
     local comps, events, pieces = default()
     local stl_render = render(comps, events, pieces)
-    iter(vim.tbl_keys(events)):map(function(e)
-      local tmp = e
-      local pattern
-      if e:find('User') then
-        pattern = vim.split(e, '%s')[2]
-        tmp = 'User'
+
+    local function update(args)
+      local ok, res = co.resume(stl_render, args)
+      if not ok then
+        vim.notify('[ModeLine] render failed: ' .. tostring(res), vim.log.levels.ERROR)
       end
-      api.nvim_create_autocmd(tmp, {
-        pattern = pattern,
+    end
+
+    for e, entries in pairs(events) do
+      local patterns = {}
+      if e == 'User' then
+        for _, entry in ipairs(entries) do
+          if entry.pattern then
+            table.insert(patterns, entry.pattern)
+          end
+        end
+      end
+
+      api.nvim_create_autocmd(e, {
+        pattern = #patterns > 0 and patterns or nil,
         callback = function(args)
-          vim.schedule(function()
-            local ok, res = co.resume(stl_render, args)
-            if not ok then
-              vim.notify('[ModeLine] render failed ' .. res, vim.log.levels.ERROR)
-            end
-          end)
+          update(args)
         end,
         desc = '[ModeLine] update',
       })
+    end
+
+    vim.schedule(function()
+      update("ModeLineInit")
     end)
   end,
 }

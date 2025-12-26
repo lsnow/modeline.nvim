@@ -90,105 +90,56 @@ local function group_fmt(prefix, name, val)
   return ('%%#ModeLine%s%s#%s%%*'):format(prefix, name, val)
 end
 
-local mode_alias = {
-  --Normal
-  ['n'] = 'Normal',
-  ['no'] = 'O-Pending',
-  ['nov'] = 'O-Pending',
-  ['noV'] = 'O-Pending',
-  ['no\x16'] = 'O-Pending',
-  ['niI'] = 'Normal',
-  ['niR'] = 'Normal',
-  ['niV'] = 'Normal',
-  ['nt'] = 'Normal',
-  ['ntT'] = 'Normal',
-  ['v'] = 'Visual',
-  ['vs'] = 'Visual',
-  ['V'] = 'V-Line',
-  ['Vs'] = 'V-Line',
-  ['\x16'] = 'V-Block',
-  ['\x16s'] = 'V-Block',
-  ['s'] = 'Select',
-  ['S'] = 'S-Line',
-  ['\x13'] = 'S-Block',
-  ['i'] = 'Insert',
-  ['ic'] = 'Insert',
-  ['ix'] = 'Insert',
-  ['R'] = 'Replace',
-  ['Rc'] = 'Replace',
-  ['Rx'] = 'Replace',
-  ['Rv'] = 'V-Replace',
-  ['Rvc'] = 'V-Replace',
-  ['Rvx'] = 'V-Replace',
-  ['c'] = 'Command',
-  ['cv'] = 'Ex',
-  ['ce'] = 'Ex',
-  ['r'] = 'Replace',
-  ['rm'] = 'More',
-  ['r?'] = 'Confirm',
-  ['!'] = 'Shell',
-  ['t'] = 'Terminal',
-}
-
-function _G.ml_mode()
-  local mode = api.nvim_get_mode().mode
-  local m = mode_alias[mode] or mode_alias[string.sub(mode, 1, 1)] or 'UNK'
-  return m:sub(1, 3):upper()
-end
-
 function M.fileinfo()
-  local name = vim.fn.expand('%:~')
+  local function get_fileinfo()
+    local name = vim.fn.expand('%:~')
 
-  if name == '' then
-    name = '[No Name]'
-  else
-    local relative_to_home = name --vim.fn.fnamemodify(name, ':~')
-    local relative_to_cwd = vim.fn.fnamemodify(name, ':.')
-
-    if #relative_to_cwd < #relative_to_home then
-      name = relative_to_cwd
+    if name == '' then
+      name = '[No Name]'
     else
-      name = relative_to_home
-    end
+      local relative_to_home = name --vim.fn.fnamemodify(name, ':~')
+      local relative_to_cwd = vim.fn.fnamemodify(name, ':.')
 
-    local max_length = 50
-    if #name > max_length then
-      local parts = vim.split(name, '/')
-      if #parts > 3 then
-        name = table.concat(vim.list_slice(parts, 1, 2), '/') .. '/.../' .. parts[#parts]
+      if #relative_to_cwd < #relative_to_home then
+        name = relative_to_cwd
       else
-        name = '...' .. name:sub(-(max_length - 3))
+        name = relative_to_home
+      end
+
+      local max_length = 50
+      if #name > max_length then
+        local parts = vim.split(name, '/')
+        if #parts > 3 then
+          name = table.concat(vim.list_slice(parts, 1, 2), '/') .. '/.../' .. parts[#parts]
+        else
+          name = '...' .. name:sub(-(max_length - 3))
+        end
       end
     end
+    return ' ' .. name .. [[%{(&modified&&&readonly?' RO*':(&modified?' **':(&readonly?' RO':'')))}  ]]
   end
   return {
-    stl = ' ' .. name .. [[%{(&modified&&&readonly?' RO*':(&modified?' **':(&readonly?' RO':'')))}  ]],
-    name = 'fileinfo',
+    stl = get_fileinfo,
+    name = 'File',
     event = { 'BufEnter' },
-    attr = stl_attr('File'),
   }
 end
 
 function M.position_info()
   return {
-    stl = '%b(0x%B) %l,%c%V %P',
-    name = 'position',
+    -- stl = '%-14.(%b(0x%B) %l,%c%V%) %P',
+    stl = '%14.(%l,%c%V%) %P',
+    name = 'Position',
     event = { 'BufEnter' },
-    attr = stl_attr('Position'),
   }
 end
 
 function M.filetype()
-  local ft = api.nvim_get_option_value('filetype', { buf = 0 })
-  -- local up = ft:sub(1, 1):upper()
-  -- if #ft == 1 then
-  --   return up
-  -- end
-  -- local alias = { cpp = 'C++' }
-  -- return alias[ft] or up .. ft:sub(2, #ft)
   return {
-    name = 'filetype',
-    stl = ft,
+    name = 'FileType',
+    stl = function()
+      return api.nvim_get_option_value('filetype', { buf = 0 })
+    end,
     event = { 'BufEnter' },
   }
 end
@@ -251,7 +202,6 @@ function M.lsp()
     end,
     name = 'Lsp',
     event = { 'LspProgress', 'LspAttach', 'LspDetach', 'BufEnter' },
-    attr = stl_attr('LSP'),
   }
 end
 
@@ -292,7 +242,7 @@ function M.gitinfo()
       end)
     end,
     async = true,
-    name = 'git',
+    name = 'Git',
     event = { 'User GitSignsUpdate', 'BufEnter' },
   }
 end
@@ -318,37 +268,43 @@ function M.diagnostic()
     api.nvim_set_hl(0, 'ModeLine' .. diagnostic.severity[i], { fg = fg, bg = stl_bg })
   end
   return {
+    name = "Diagnostic",
     stl = diagnostic_info(),
     event = { 'DiagnosticChanged', 'BufEnter', 'LspAttach' },
   }
 end
 
 function M.eol()
-  local format = vim.bo.fileformat
-  local icon = ""
-  -- local text = ""
+  local function get_eol()
+    local format = vim.bo.fileformat
+    local icon = ""
+    -- local text = ""
 
-  if format == 'unix' then
-    icon = " "
-    --text = "LF"
-  elseif format == 'dos' then
-    icon = " "
-    --text = "CRLF"
-  elseif format == 'mac' then
-    icon = " "
-    --text = "CR"
+    if format == 'unix' then
+      icon = "  "
+      --text = "LF"
+    elseif format == 'dos' then
+      icon = "  "
+      --text = "CRLF"
+    elseif format == 'mac' then
+      icon = "  "
+      --text = "CR"
+    end
+    return icon
   end
   return {
-    name = 'eol',
-    stl = (' %s'):format(icon),
+    name = 'Eol',
+    stl = get_eol,
     event = { 'BufEnter' },
   }
 end
 
 function M.encoding()
   return {
-    stl = (' %s'):format(vim.bo.fileencoding),
-    name = 'filencode',
+    stl = function()
+      return (' %s'):format(vim.bo.fileencoding)
+    end,
+    name = 'Encoding',
     event = { 'BufEnter' },
   }
 end
@@ -407,7 +363,6 @@ function M.doucment_symbol()
     async = true,
     name = 'DocumentSymbol',
     event = { 'CursorHold' },
-    attr = stl_attr('Symbol'),
   }
 end
 
